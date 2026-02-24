@@ -1,0 +1,25 @@
+# 环境变量
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+venv/
+.venv/
+
+# 向量数据库
+chroma_db/
+
+# IDE
+.vscode/
+.idea/
+
+# 日志
+*.log
+logs/

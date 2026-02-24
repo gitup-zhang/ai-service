@@ -1,0 +1,27 @@
+# Web 框架
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+pydantic==2.10.4
+
+# LLM - 通义千问
+dashscope
+
+# RAG 框架
+llama-index-core==0.12.12
+llama-index-vector-stores-chroma==0.4.1
+llama-index-embeddings-dashscope==0.3.0
+llama-index-llms-dashscope==0.3.0
+
+# 向量数据库
+chromadb==0.6.3
+
+# MCP 工具链
+langchain-core==0.3.28
+langchain-community==0.3.13
+
+# HTTP 客户端
+httpx==0.28.1
+
+# 定时任务
+apscheduler==3.10.4
