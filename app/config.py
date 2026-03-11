@@ -14,6 +14,7 @@ class Settings:
     # LLM 配置
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
     DASHSCOPE_MODEL: str = os.getenv("DASHSCOPE_MODEL", "qwen-turbo")
+    DASHSCOPE_EMBEDDING_MODEL: str = os.getenv("DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v3")
 
     # 后端业务 API
     BACKEND_API_URL: str = os.getenv("BACKEND_API_URL", "http://47.113.194.28:8080/api")

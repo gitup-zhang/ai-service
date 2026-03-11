@@ -5,6 +5,7 @@
 import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
 from app.core.llm import call_llm
 from app.prompts.event_prompts import (
     EVENT_SUMMARY_PROMPT,

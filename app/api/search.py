@@ -1,8 +1,8 @@
 """
-语义搜索接口 - RAG 驱动 (Phase 2 实现)
+语义搜索接口 - RAG 驱动
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -31,14 +31,22 @@ class SearchResponse(BaseModel):
 
 
 @router.post("/", response_model=SearchResponse, summary="语义搜索")
-async def semantic_search(req: SearchRequest):
+async def semantic_search(req: SearchRequest, request: Request):
     """
     语义搜索 - 基于 RAG 的智能检索
 
-    Phase 2 实现，当前返回占位响应。
+    根据用户问题在向量库中检索相关文章和活动，并由 AI 生成回答。
     """
-    # TODO: Phase 2 - 集成 ChromaDB + LlamaIndex
-    return SearchResponse(
-        results=[],
-        answer="语义搜索功能即将上线，敬请期待！"
-    )
+    try:
+        rag = request.app.state.rag_engine
+        result = rag.query(
+            question=req.query,
+            content_type=req.content_type,
+            top_k=req.top_k,
+        )
+        return SearchResponse(
+            results=[SearchResult(**r) for r in result["results"]],
+            answer=result["answer"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
