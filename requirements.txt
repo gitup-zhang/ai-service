@@ -16,12 +16,29 @@ llama-index-llms-dashscope==0.3.0
 # 向量数据库
 chromadb==0.6.3
 
-# MCP 工具链
-langchain-core==0.3.28
-langchain-community==0.3.13
+# Agent 框架 (LangGraph 状态图)
+langgraph>=0.4.0
+langchain-core>=0.3.28
+langchain-community>=0.3.13
+
+# Skill 解析
+pyyaml>=6.0
+
+# SSE 流式输出
+sse-starlette>=2.0.0
 
 # HTTP 客户端
 httpx==0.28.1
 
 # 定时任务
 apscheduler==3.10.4
+
+# 性能监控接入
+prometheus-fastapi-instrumentator==7.0.0
+langsmith>=0.1.0
+
+# 容错与重试机制
+tenacity==9.0.0
+
+# 压测工具 (仅测试环境需要)
+locust==2.32.7

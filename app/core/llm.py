@@ -4,8 +4,21 @@ LLM 调用层 - 通义千问 (DashScope) 封装
 
 from dashscope import Generation
 from app.config import settings
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from langsmith import traceable
 
 
+def _fallback_msg(retry_state):
+    print(f"LLM 调用失败，触发降级兜底方案。错误详情: {retry_state.outcome.exception()}")
+    return "抱歉，由于模型服务器当前响应异常，暂时无法处理您的请求。请稍后再试或换一个问题表达。"
+
+@traceable(name="call_llm_qwen", run_type="llm")
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(Exception),
+    retry_error_callback=_fallback_msg
+)
 async def call_llm(
     prompt: str,
     content: str,
@@ -44,6 +57,13 @@ async def call_llm(
         )
 
 
+@traceable(name="call_llm_with_history_qwen", run_type="llm")
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(Exception),
+    retry_error_callback=_fallback_msg
+)
 async def call_llm_with_history(
     system_prompt: str,
     messages: list[dict],

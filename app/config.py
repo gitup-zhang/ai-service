@@ -26,5 +26,10 @@ class Settings:
     AI_SERVICE_HOST: str = os.getenv("AI_SERVICE_HOST", "0.0.0.0")
     AI_SERVICE_PORT: int = int(os.getenv("AI_SERVICE_PORT", "8000"))
 
+    # LangSmith 链路追踪配置 (如需开启请在环境中配置对应的环境变量)
+    LANGCHAIN_TRACING_V2: str = os.getenv("LANGCHAIN_TRACING_V2", "false")
+    LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "ai-service")
+    LANGSMITH_API_KEY: str = os.getenv("LANGSMITH_API_KEY", "")
+
 
 settings = Settings()

@@ -10,7 +10,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import article, event, chat, search
 from app.api import indexing
+from app.api import agent as agent_api
 from app.config import settings
+import os
+from dotenv import load_dotenv
+
+# 强制加载环境变量并注入 LangSmith 以保证 Tracing 生效
+load_dotenv()
+os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "false")
+os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "ai-service")
+if os.getenv("LANGSMITH_API_KEY"):
+    os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
+from prometheus_fastapi_instrumentator import Instrumentator
 
 
 @asynccontextmanager
@@ -36,8 +47,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI 微服务",
-    description="为 UniApp 新闻资讯应用提供 AI 能力：文章解读、活动助手、语义搜索、智能对话",
-    version="2.0.0",
+    description="为 UniApp 新闻资讯应用提供 AI 能力：文章解读、活动助手、语义搜索、智能对话、Adaptive Agent",
+    version="3.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -58,6 +69,10 @@ app.include_router(event.router, prefix="/api/ai/event", tags=["活动 AI"])
 app.include_router(chat.router, prefix="/api/ai/chat", tags=["智能对话"])
 app.include_router(search.router, prefix="/api/ai/search", tags=["语义搜索"])
 app.include_router(indexing.router, prefix="/api/ai/index", tags=["索引管理"])
+app.include_router(agent_api.router, tags=["Adaptive Agent"])
+
+# 挂载 Prometheus 监控指标 (将会在 /metrics 暴露数据)
+Instrumentator().instrument(app).expose(app)
 
 
 @app.get("/", tags=["健康检查"])
@@ -69,10 +84,11 @@ async def root():
 
     return {
         "service": "AI 微服务",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "status": "running",
         "model": settings.DASHSCOPE_MODEL,
         "rag": rag_status,
+        "agent": "adaptive-engine-v1",
     }
 
 
