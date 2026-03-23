@@ -99,6 +99,15 @@ def _call_llm_with_tools(messages: list[dict], tools_schema: list[dict]) -> dict
     return {"role": "assistant", "content": "抱歉，处理时出现异常。"}
 
 
+def _extract_tools_used(state: AgentState) -> list[str]:
+    """从 AgentState 消息中提取所有已调用工具的名称"""
+    tools_used = set()
+    for msg in state.get("messages", []):
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls"):
+            for tc in (msg.tool_calls or []):
+                tools_used.add(tc.get("name", "unknown"))
+    return list(tools_used)
+
 def _get_tool_schemas(tools) -> list[dict]:
     """将 LangChain tool 转为 DashScope 工具 schema"""
     schemas = []
@@ -379,9 +388,18 @@ def create_nodes(tools: list, skill_loader: SkillLoader, memory: EpisodicMemory,
             "trace": state.get("trace", []) + [trace_step],
         }
 
-    # ===== 5. 反思节点 (Reflexion) =====
+    # ===== 5. 反思节点 (MAR: Multi-Agent Reflexion) =====
     async def reflect_node(state: AgentState) -> dict:
-        """自我反思 — 分析不足, 生成改进策略, 存入情景记忆"""
+        """
+        多智体反思 — 基于 MAR (Multi-Agent Reflexion, 2025.12) 论文
+
+        将原始的单 Agent 自我反思升级为:
+        1. 多角色 Critic 并发诊断 (FactChecker + CompletenessAuditor + ClarityReviewer)
+        2. Judge 裁判合成统一反思策略
+        3. 存入情景记忆
+
+        降级策略: MAR 流程异常时退回到单 LLM 反思
+        """
         start = time.time()
 
         answer = _extract_last_answer(state)
@@ -392,17 +410,48 @@ def create_nodes(tools: list, skill_loader: SkillLoader, memory: EpisodicMemory,
                 break
 
         eval_result = state.get("evaluation") or EvaluationResult()
+        tools_used = _extract_tools_used(state)
 
-        reflection = _call_llm(
-            [{"role": "user", "content": REFLECT_PROMPT.format(
+        # ---- MAR 多角色反思 ----
+        reflection = ""
+        reflection_detail = {}
+        try:
+            from app.agent.multi_agent_reflect import MAROrchestrator
+
+            mar = MAROrchestrator()
+            verdict = await mar.reflect(
                 question=question,
-                answer=answer[:500],
+                answer=answer[:800],
+                plan=state.get("plan", ""),
+                tools_used=tools_used,
                 confidence=eval_result.confidence,
-                feedback=eval_result.feedback,
-            )}],
-            max_tokens=300,
-            temperature=0.3,
-        )
+                eval_feedback=eval_result.feedback,
+            )
+
+            reflection = verdict.synthesized_reflection
+
+            # 保存详细信息供 trace 和 API 返回
+            reflection_detail = {
+                "method": "MAR",
+                "critic_count": verdict.critic_count,
+                "consensus_issues": verdict.consensus_issues,
+                "prioritized_actions": verdict.prioritized_actions,
+                "aggregate_confidence": verdict.aggregate_confidence,
+            }
+
+        except Exception as e:
+            # ---- 降级: 单 LLM 反思 ----
+            reflection = _call_llm(
+                [{"role": "user", "content": REFLECT_PROMPT.format(
+                    question=question,
+                    answer=answer[:500],
+                    confidence=eval_result.confidence,
+                    feedback=eval_result.feedback,
+                )}],
+                max_tokens=300,
+                temperature=0.3,
+            )
+            reflection_detail = {"method": "single_agent_fallback", "error": str(e)[:100]}
 
         # 存入情景记忆
         if memory:
@@ -413,10 +462,17 @@ def create_nodes(tools: list, skill_loader: SkillLoader, memory: EpisodicMemory,
                 skill_used=state.get("active_skill", ""),
             )
 
+        # 构建 trace
+        thought_summary = f"MAR 多角色反思:\n{reflection}"
+        if reflection_detail.get("consensus_issues"):
+            thought_summary += (
+                f"\n共识问题: {', '.join(reflection_detail['consensus_issues'][:3])}"
+            )
+
         trace_step = TraceStep(
             step=len(state.get("trace", [])) + 1,
             node="reflect",
-            thought=f"Reflexion 反思:\n{reflection}",
+            thought=thought_summary,
             time_ms=int((time.time() - start) * 1000),
         )
 

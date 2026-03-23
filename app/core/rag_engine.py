@@ -204,25 +204,18 @@ class RAGEngine:
 
     # ============ 查询操作 ============
 
-    def query(
+    def _raw_retrieve(
         self,
         question: str,
         content_type: str = "all",
-        top_k: int = 3,
-    ) -> dict:
+        top_k: int = 5,
+    ) -> list[dict]:
         """
-        语义搜索
-
-        Args:
-            question: 搜索问题
-            content_type: "all" | "article" | "event"
-            top_k: 返回结果数
-
-        Returns:
-            {"results": [...], "answer": "..."}
+        内部检索方法 — 仅返回原始检索结果, 不调用 LLM 生成回答.
+        同时供 CRAGPipeline 内部二次检索调用.
         """
         all_results = []
-        MIN_SCORE = 0.3  # 最低相关性分数阈值
+        MIN_SCORE = 0.2  # 初筛宽松阈值, CRAG 会做精筛
 
         search_types = (
             [content_type]
@@ -232,19 +225,17 @@ class RAGEngine:
 
         for st in search_types:
             index = self._get_index(st)
-            # 使用 retriever 先检索，再按分数过滤
             retriever = index.as_retriever(similarity_top_k=top_k)
             nodes = retriever.retrieve(question)
 
             for node in nodes:
                 score = node.score or 0.0
-                # 过滤掉相关性太低的结果
                 if score < MIN_SCORE:
                     continue
                 meta = node.metadata or {}
                 all_results.append({
                     "title": meta.get("title", ""),
-                    "content": node.text[:300],
+                    "content": node.text[:500],  # CRAG 需要更多上下文做 strip 拆分
                     "content_type": meta.get("content_type", st),
                     "score": round(score, 4),
                     "metadata": {
@@ -262,20 +253,85 @@ class RAGEngine:
             if key not in seen or r["score"] > seen[key]["score"]:
                 seen[key] = r
         all_results = list(seen.values())
-
-        # 按相关性排序
         all_results.sort(key=lambda x: x["score"], reverse=True)
-        top_results = all_results[:top_k]
+        return all_results[:top_k]
 
-        # 只有存在高质量结果时才让 LLM 生成回答
+    def query(
+        self,
+        question: str,
+        content_type: str = "all",
+        top_k: int = 3,
+    ) -> dict:
+        """
+        语义搜索 — 集成 CRAG (Corrective RAG) 流水线
+
+        流程:
+          1. 向量检索获取候选文档
+          2. CRAG 流水线: 评估质量 → 精炼/重写/补充 → 输出高质量上下文
+          3. LLM 基于精炼上下文生成回答
+
+        Args:
+            question: 搜索问题
+            content_type: "all" | "article" | "event"
+            top_k: 返回结果数
+
+        Returns:
+            {"results": [...], "answer": "...", "crag": {...}}
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # ---- Phase 1: 初始检索 ----
+        top_results = self._raw_retrieve(question, content_type, top_k)
+
+        # ---- Phase 2: CRAG 精炼 ----
+        crag_info = {}
+        context_text = ""
+        try:
+            from app.core.corrective_rag import CRAGPipeline
+
+            # 构建 retriever 回调 — 供 CRAG 内部二次检索使用
+            def retriever_fn(q: str, k: int) -> list[dict]:
+                return self._raw_retrieve(q, content_type, k)
+
+            crag = CRAGPipeline(retriever_fn=retriever_fn)
+            crag_result = crag.process(question, top_results, top_k)
+
+            # 使用 CRAG 精炼后的上下文
+            if crag_result.refined_context:
+                context_text = crag_result.refined_context
+            else:
+                # CRAG 路径 INCORRECT 且二次检索也无结果 → 无上下文
+                context_text = ""
+
+            crag_info = {
+                "retrieval_grade": crag_result.retrieval_grade.value,
+                "processing_path": crag_result.processing_path,
+                "total_strips": crag_result.total_strips,
+                "relevant_strips": crag_result.relevant_strips,
+                "rewritten_queries": crag_result.rewritten_queries,
+                "doc_scores": [
+                    {"index": ds.doc_index, "score": ds.score, "grade": ds.grade.value}
+                    for ds in crag_result.doc_scores
+                ],
+            }
+            logger.info(
+                f"[RAG+CRAG] grade={crag_result.retrieval_grade.value}, "
+                f"path={crag_result.processing_path}, "
+                f"context_len={len(context_text)}"
+            )
+        except Exception as e:
+            logger.warning(f"[RAG] CRAG 流水线异常, 降级为原始上下文: {e}")
+            # CRAG 降级兜底: 直接用原始检索结果
+            if top_results:
+                context_parts = []
+                for i, r in enumerate(top_results, 1):
+                    context_parts.append(f"[来源{i}] {r['title']}\n{r['content']}")
+                context_text = "\n\n".join(context_parts)
+
+        # ---- Phase 3: LLM 生成回答 ----
         answer = "未找到相关内容"
-        if top_results:
-            # 拼接检索到的上下文给 LLM
-            context_parts = []
-            for i, r in enumerate(top_results, 1):
-                context_parts.append(f"[来源{i}] {r['title']}\n{r['content']}")
-            context_text = "\n\n".join(context_parts)
-
+        if context_text:
             prompt = (
                 "你是一个智能搜索助手。请仅根据以下检索到的内容回答用户的问题。\n"
                 "如果检索内容无法回答问题，请如实说明'根据现有资料无法回答该问题'。\n"
@@ -289,10 +345,14 @@ class RAGEngine:
                 answer = str(llm_response).strip()
             except Exception as e:
                 answer = f"AI 回答生成失败: {str(e)}"
+        elif top_results:
+            # CRAG 精炼后无上下文但有检索结果 → 告知用户
+            answer = "检索到一些内容，但经评估与您的问题相关性不足，建议换个角度提问。"
 
         return {
             "results": top_results,
             "answer": answer,
+            "crag": crag_info,
         }
 
     # ============ 状态查询 ============

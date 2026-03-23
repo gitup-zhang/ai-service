@@ -11,8 +11,12 @@ Adaptive Agent Engine — LangGraph 状态图定义
 参考论文:
 - ReAct (Yao 2023): Thought→Action→Observation 循环推理
 - Reflexion (Shinn 2023): Actor+Evaluator+Self-Reflection + 情景记忆
+- A-MEM (2025): Agentic Memory — 结构化笔记 + 知识网络 + 记忆进化
+- MAR (2025.12): Multi-Agent Reflexion — 多角色批评 + 裁判合成
+- CRAG (Yan, ICLR 2025): Corrective RAG — 检索质量评估 + 知识精炼
 """
 
+import logging
 import time
 from langgraph.graph import StateGraph, START, END
 
@@ -20,12 +24,13 @@ from app.agent.state import AgentState
 from app.agent.schemas import AgentResult, TraceStep
 from app.agent.nodes import create_nodes
 from app.agent.evaluator import QualityEvaluator
-from app.agent.memory import EpisodicMemory
 from app.agent.skill_loader import SkillLoader
 
 from app.tools.event_tools import search_events, get_event_detail
 from app.tools.article_tools import search_articles, get_article_detail
 from app.tools.rag_tools import semantic_search
+
+logger = logging.getLogger(__name__)
 
 
 class AdaptiveAgentEngine:
@@ -34,6 +39,10 @@ class AdaptiveAgentEngine:
 
     在 LangGraph 框架上融合 ReAct + Reflexion 架构,
     实现 Load Skill → Plan → ReAct → Evaluate → Reflect 闭环.
+
+    记忆系统: A-MEM (结构化笔记 + 知识网络 + 记忆进化)
+    反思系统: MAR (多角色批评 + 裁判合成)
+    RAG增强:  CRAG (检索质量评估 + 知识精炼)
     """
 
     def __init__(self):
@@ -48,11 +57,33 @@ class AdaptiveAgentEngine:
 
         # ===== 组件 =====
         self.skill_loader = SkillLoader()
-        self.memory = EpisodicMemory()
+        self.memory = self._init_memory()
         self.evaluator = QualityEvaluator()
 
         # ===== 构建状态图 =====
         self.graph = self._build_graph()
+
+    def _init_memory(self):
+        """
+        初始化记忆系统 — 优先使用 A-MEM, 降级到 EpisodicMemory
+
+        A-MEM (Agentic Memory) 提供:
+        - 结构化笔记 (context + keywords + tags)
+        - 知识网络链接 (自动发现关联记忆)
+        - 记忆进化 (新记忆触发旧记忆更新)
+        - 图扩展检索 (BFS 沿链接探索)
+        """
+        try:
+            from app.agent.agentic_memory import AgenticMemoryManager
+            memory = AgenticMemoryManager()
+            logger.info("[Engine] 记忆系统: A-MEM (AgenticMemoryManager) 初始化成功")
+            return memory
+        except Exception as e:
+            logger.warning(
+                f"[Engine] A-MEM 初始化失败, 降级到 EpisodicMemory: {e}"
+            )
+            from app.agent.memory import EpisodicMemory
+            return EpisodicMemory()
 
     def _build_graph(self):
         """构建 Adaptive Agent 的 LangGraph StateGraph"""
